@@ -72,3 +72,11 @@ details.disclosure{background:var(--panel);border:1px solid var(--border);border
 @media(max-width:1120px){.pokemon-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.hero{grid-template-columns:minmax(0,1fr) 220px}}
 @media(max-width:860px){.pokemon-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.filter-row{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{grid-template-columns:1fr}.hero-orb{justify-self:start;width:170px}.detail-hero{grid-template-columns:150px minmax(0,1fr)}.detail-grid,.effect-grid{grid-template-columns:1fr}}
 @media(max-width:620px){.app-shell{width:min(var(--max),calc(100% - 20px))}.site-header{min-height:64px}.ghost-btn{padding:9px 11px}.hero{padding:36px 4px 24px}.hero h1{font-size:2.5rem}.controls-card{padding:12px}.search-row{align-items:stretch}.search-box{min-height:46px}.filter-row{grid-template-columns:1fr 1fr}.pokemon-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.pokemon-card{min-height:220px;padding:11px}.section-heading{align-items:start;flex-direction:column}.site-footer{flex-direction:column}.footer-note{text-align:left}.detail-content{padding:12px}.detail-hero{grid-template-columns:1fr}.detail-art{width:190px;justify-self:center}.form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.move-row{grid-template-columns:1fr auto}.move-row span:last-child{grid-column:2}}
+
+.card-rarity{margin-top:5px}.rarity-badge{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.12);font-size:.61rem;font-weight:900;letter-spacing:.05em;text-transform:uppercase}
+.rarity-common{background:rgba(148,163,184,.12);color:#aeb8c9}
+.rarity-uncommon{background:rgba(52,211,153,.12);color:#5ee0b2}
+.rarity-rare{background:rgba(96,165,250,.14);color:#77b7ff}
+.rarity-ultra-rare{background:rgba(167,139,250,.14);color:#b89cff}
+.rarity-legendary{background:rgba(251,191,36,.16);color:#ffd76b}
+.rarity-mythical{background:rgba(244,114,182,.16);color:#ff9dc9}
