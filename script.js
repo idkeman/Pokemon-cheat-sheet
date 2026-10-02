@@ -178,6 +178,7 @@ async function loadDetailData() {
     ];
     const values = await Promise.all(jobs.map(async ([key,file]) => [key,await cachedCSV(file).catch(() => [])]));
     const data = Object.fromEntries(values);
+    if (!state.speciesRows.length) state.speciesRows = await cachedCSV("pokemon_species.csv").catch(() => []);
     state.evolutionRows = data.evolution;
     const flavor = data.flavor.filter((r) => r.language_id === "9");
     const prose = data.speciesProse.filter((r) => r.local_language_id === "9");
