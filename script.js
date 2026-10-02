@@ -312,7 +312,7 @@ function speciesInfoMarkup(species,pokemon) {
   const region=regionForId(pokemon.id);
   return `<div class="detail-grid">
     <div class="info-card"><h3>Biology</h3><div class="info-lines">
-      <div class="info-line"><span>Rarity</span><span>${rarity.label}</span></div>
+      <div class="info-line"><span>Rarity</span><span>${rarityForSpecies(species).label}</span></div>
       <div class="info-line"><span>Region</span><span>${titleCase(region)}</span></div>
       <div class="info-line"><span>Classification</span><span>${classification}</span></div>
       <div class="info-line"><span>Color ID</span><span>${species?.color_id || "—"}</span></div>
@@ -345,7 +345,7 @@ function flavorMarkup(species) {
   for(const row of entries){const text=cleanText(row.flavor_text);if(!text||seen.has(text))continue;seen.add(text);unique.push({text,version:row.version_id});}
   return `<details class="disclosure" open><summary>Pokédex entries (${unique.length})</summary><div style="display:grid;gap:8px;padding-bottom:12px">${unique.map((x)=>`<div class="text-chip" style="display:block;line-height:1.5"><strong>Version #${x.version}</strong><br>${x.text}</div>`).join("") || '<div class="text-chip">No English entries available in the repository data.</div>'}</div></details>`;
 }
-async function openDetail(id) {
+async async function openDetail(id) {
   if(!id)return;
   els.overlay.classList.remove("hidden");els.panel.classList.add("open");els.panel.setAttribute("aria-hidden","false");
   document.body.style.overflow="hidden";els.detail.innerHTML='<div class="loading"><div><div class="spinner"></div>Loading repository data…</div></div>';
