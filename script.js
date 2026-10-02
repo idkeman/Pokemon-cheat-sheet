@@ -459,7 +459,7 @@ function randomPokemon() {
 function setupEvents() {
   els.search.addEventListener("input",(e)=>{state.query=e.target.value;renderCatalog();});
   els.generation.addEventListener("change",(e)=>{state.generation=e.target.value;renderCatalog();});
-  els.type.addEventListener("change",async(e)=>{state.type=e.target.value;if(state.type && !state.typeBySpecies.size) await loadTypeFilter(state.type);renderCatalog();});
+  els.type.addEventListener("change",async(e)=>{state.type=e.target.value;if(state.type && !state.typeMeta.has(state.type)) await loadTypeFilter(state.type);renderCatalog();});
   els.region.addEventListener("change",(e)=>{state.region=e.target.value;renderCatalog();});
   els.sort.addEventListener("change",(e)=>{state.sort=e.target.value;renderCatalog();});
   els.reset.addEventListener("click",()=>{state.query=state.generation=state.type=state.region="";state.sort="dex";els.search.value="";els.generation.value="";els.type.value="";els.region.value="";els.sort.value="dex";renderCatalog();});
