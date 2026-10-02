@@ -19,6 +19,10 @@ const GENERATION_RANGES = [
   [494,649,5,"unova"],[650,721,6,"kalos"],[722,809,7,"alola"],[810,905,8,"galar"],[906,1025,9,"paldea"]
 ];
 const REGION_LABELS = {kanto:"Kanto",johto:"Johto",hoenn:"Hoenn",sinnoh:"Sinnoh",unova:"Unova",kalos:"Kalos",alola:"Alola",galar:"Galar",paldea:"Paldea"};
+const REQUIRED_POKEMON = [
+  {id:808,identifier:"meltan",species_id:808,height:"2",weight:"80",base_experience:"135",order:"989",is_default:"1"},
+  {id:809,identifier:"melmetal",species_id:809,height:"25",weight:"8000",base_experience:"270",order:"990",is_default:"1"}
+];
 
 const state = {
   pokemon: [], speciesRows: [], typesByPokemon: new Map(), statsByPokemon: new Map(), abilitiesByPokemon: new Map(),
@@ -409,6 +413,10 @@ async function initCatalog(){
     ]);
     state.speciesRows = speciesRows;
     state.pokemon=pokemonRows.filter((row)=>row.is_default==="1" && Number(row.id)<=1025).map((row)=>({...row,id:Number(row.id)}));
+    for (const required of REQUIRED_POKEMON) {
+      if (!state.pokemon.some((row) => row.id === required.id)) state.pokemon.push(required);
+    }
+    state.pokemon.sort((a,b)=>a.id-b.id);
     for(const row of typeRows){
       const id=Number(row.pokemon_id);
       if(id>1025)continue;
