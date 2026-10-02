@@ -98,6 +98,24 @@ function regionForId(id) {
   const match = GENERATION_RANGES.find(([min,max]) => id >= min && id <= max);
   return match ? match[3] : "";
 }
+function rarityForSpecies(species) {
+  const captureRate = Number(species?.capture_rate);
+  if (species?.is_mythical === "1") return {key:"mythical",label:"Mythical",detail:"Mythical Pokémon"};
+  if (species?.is_legendary === "1") return {key:"legendary",label:"Legendary",detail:"Legendary Pokémon"};
+  if (Number.isFinite(captureRate) && captureRate <= 10) return {key:"ultra-rare",label:"Ultra Rare",detail:"Very difficult to capture"};
+  if (Number.isFinite(captureRate) && captureRate <= 45) return {key:"rare",label:"Rare",detail:"Difficult to capture"};
+  if (Number.isFinite(captureRate) && captureRate <= 120) return {key:"uncommon",label:"Uncommon",detail:"Moderate capture difficulty"};
+  return {key:"common",label:"Common",detail:"High capture rate"};
+}
+function rarityForId(id) {
+  const pokemon = state.pokemon.find((p) => p.id === id);
+  const species = state.speciesRows.find((s) => Number(s.id) === Number(pokemon?.species_id || id));
+  return rarityForSpecies(species);
+}
+function rarityBadge(rarity) {
+  return `<span class="rarity-badge rarity-${rarity.key}" title="${rarity.detail}">${rarity.label}</span>`;
+}
+
 function populateFilters() {
   els.generation.innerHTML = '<option value="">All generations</option>' +
     GENERATION_RANGES.map(([, ,gen]) => `<option value="${gen}">Generation ${GEN_ROMAN[gen]}</option>`).join("");
@@ -128,6 +146,7 @@ function renderCatalog() {
     const types = state.typesByPokemon.get(item.id) || [];
     return `<button class="pokemon-card" type="button" data-id="${item.id}">
       <div class="card-top"><span class="dex-no">#${String(item.id).padStart(4,"0")}</span><span class="card-gen">GEN ${GEN_ROMAN[gen]}</span></div>
+      <div class="card-rarity">${rarityBadge(rarityForId(item.id))}</div>
       <div class="card-art"><img loading="lazy" src="${spriteUrl(item.id)}" onerror="this.src='${SPRITES}/${item.id}.png';this.onerror=null" alt="${formatSpeciesName(item.identifier)}"></div>
       <div class="card-name">${formatSpeciesName(item.identifier)}</div>
       <div class="type-list">${typeBadges(types) || '<span class="text-chip">Type unavailable</span>'}</div>
@@ -147,7 +166,6 @@ async function loadDetailData() {
   if (state.detailLoading) return state.detailLoading;
   state.detailLoading = (async () => {
     const jobs = [
-      ["species", "pokemon_species.csv"],
       ["stats", "pokemon_stats.csv"],
       ["abilities", "pokemon_abilities.csv"],
       ["moves", "moves.csv"],
@@ -160,7 +178,6 @@ async function loadDetailData() {
     ];
     const values = await Promise.all(jobs.map(async ([key,file]) => [key,await cachedCSV(file).catch(() => [])]));
     const data = Object.fromEntries(values);
-    state.speciesRows = data.species;
     state.evolutionRows = data.evolution;
     const flavor = data.flavor.filter((r) => r.language_id === "9");
     const prose = data.speciesProse.filter((r) => r.local_language_id === "9");
@@ -294,6 +311,7 @@ function speciesInfoMarkup(species,pokemon) {
   const region=regionForId(pokemon.id);
   return `<div class="detail-grid">
     <div class="info-card"><h3>Biology</h3><div class="info-lines">
+      <div class="info-line"><span>Rarity</span><span>${rarity.label}</span></div>
       <div class="info-line"><span>Region</span><span>${titleCase(region)}</span></div>
       <div class="info-line"><span>Classification</span><span>${classification}</span></div>
       <div class="info-line"><span>Color ID</span><span>${species?.color_id || "—"}</span></div>
@@ -335,6 +353,7 @@ async function openDetail(id) {
   try {
     await loadDetailData(); await loadAbilityData();
     const pokemon=state.pokemon.find((p)=>p.id===id), species=getSpecies(id);
+    const rarity=rarityForSpecies(species);
     if(!pokemon||!species) throw new Error("Pokemon was not found in repository data");
     const types=state.typesByPokemon.get(id)||[];
     const flavor=cleanText(species.englishFlavor?.at(-1)?.flavor_text||"");
@@ -345,6 +364,7 @@ async function openDetail(id) {
           <div class="eyebrow">GENERATION ${GEN_ROMAN[generationForId(pokemon.id)] || generationForId(pokemon.id)}</div>
           <h1 id="detailTitle">${formatSpeciesName(species.identifier)}</h1>
           <div class="dex">National Dex #${String(pokemon.id).padStart(4,"0")}</div>
+          <div class="type-list">${rarityBadge(rarity)}</div>
           <div class="type-list">${typeBadges(types)}</div>
           <p class="detail-subtitle">${flavor || "No English Pokédex entry was available."}</p>
         </div>
@@ -381,7 +401,12 @@ function setTheme(theme){
 async function initCatalog(){
   setStatus("Loading Pokémon database from GitHub…","loading");
   try{
-    const [pokemonRows,typeRows]=await Promise.all([cachedCSV("pokemon.csv"),cachedCSV("pokemon_types.csv")]);
+    const [pokemonRows,typeRows,speciesRows]=await Promise.all([
+      cachedCSV("pokemon.csv"),
+      cachedCSV("pokemon_types.csv"),
+      cachedCSV("pokemon_species.csv").catch(() => [])
+    ]);
+    state.speciesRows = speciesRows;
     state.pokemon=pokemonRows.filter((row)=>row.is_default==="1" && Number(row.id)<=1025).map((row)=>({...row,id:Number(row.id)}));
     for(const row of typeRows){
       const id=Number(row.pokemon_id);
