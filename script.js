@@ -1,4 +1,7 @@
-const API = "https://pokeapi.co/api/v2";
+const DATA_ROOTS = [
+  "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/",
+  "https://github.com/PokeAPI/pokeapi/raw/refs/heads/master/data/v2/csv/"
+];
 const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon";
 const ART = `${SPRITES}/other/official-artwork`;
 const GEN_ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
@@ -8,34 +11,20 @@ const TYPE_EMOJI = {
   poison:"☣",ground:"▱",flying:"⌁",psychic:"◉",bug:"◇",rock:"⬢",ghost:"◌",
   dragon:"♢",dark:"☾",steel:"⬡",fairy:"✿"
 };
-const STAT_NAMES = {
-  hp:"HP",attack:"Attack",defense:"Defense","special-attack":"Sp. Atk","special-defense":"Sp. Def",speed:"Speed"
-};
+const STAT_NAMES = {hp:"HP",attack:"Attack",defense:"Defense","special-attack":"Sp. Atk","special-defense":"Sp. Def",speed:"Speed"};
+const STAT_IDS = {1:"hp",2:"attack",3:"defense",4:"special-attack",5:"special-defense",6:"speed"};
+const TYPE_IDS = new Map();
 const GENERATION_RANGES = [
   [1,151,1,"kanto"],[152,251,2,"johto"],[252,386,3,"hoenn"],[387,493,4,"sinnoh"],
   [494,649,5,"unova"],[650,721,6,"kalos"],[722,809,7,"alola"],[810,905,8,"galar"],[906,1025,9,"paldea"]
 ];
-const REGION_LABELS = {
-  kanto:"Kanto",johto:"Johto",hoenn:"Hoenn",sinnoh:"Sinnoh",unova:"Unova",
-  kalos:"Kalos",alola:"Alola",galar:"Galar",paldea:"Paldea"
-};
+const REGION_LABELS = {kanto:"Kanto",johto:"Johto",hoenn:"Hoenn",sinnoh:"Sinnoh",unova:"Unova",kalos:"Kalos",alola:"Alola",galar:"Galar",paldea:"Paldea"};
 
 const state = {
-  species: [],
-  generationBySpecies: new Map(),
-  regionByGeneration: new Map(),
-  typeBySpecies: new Map(),
-  typeMeta: new Map(),
-  generationMeta: [],
-  cache: new Map(),
-  abilityCache: new Map(),
-  currentResults: [],
-  typeLoading: new Set(),
-  query: "",
-  generation: "",
-  type: "",
-  region: "",
-  sort: "dex"
+  pokemon: [], speciesRows: [], typesByPokemon: new Map(), statsByPokemon: new Map(), abilitiesByPokemon: new Map(),
+  abilities: new Map(), moves: new Map(), evolutionRows: [], typeMeta: new Map(), cache: new Map(),
+  currentResults: [], detailLoaded: false, detailLoading: null,
+  query:"", generation:"", type:"", region:"", sort:"dex"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -58,33 +47,57 @@ function formatSpeciesName(value) {
 function idFromUrl(url) { const match = String(url || "").match(/\/(\d+)\/?$/); return match ? Number(match[1]) : null; }
 function spriteUrl(id) { return `${ART}/${id}.png`; }
 function typeBadge(type) { return `<span class="type-badge type-${type}">${TYPE_EMOJI[type] || ""} ${titleCase(type)}</span>`; }
-function typeBadges(types) { return (types || []).map((t) => typeBadge(typeof t === "string" ? t : t.type.name)).join(""); }
+function typeBadges(types) { return (types || []).map((t) => typeBadge(typeof t === "string" ? t : t.identifier || t.type?.name)).join(""); }
 function cleanText(text) { return String(text || "").replace(/[\n\f]+/g," ").replace(/\s+/g," ").trim(); }
-function englishText(entries,key="flavor_text") {
-  const english = (entries || []).filter((entry) => entry.language?.name === "en");
-  return english.length ? english[english.length - 1][key] || "" : "";
+function csvRows(text) {
+  const rows = [], row = [], field = [];
+  let quoted = false;
+  const pushField = () => { row.push(field.join("")); field.length = 0; };
+  const pushRow = () => { pushField(); rows.push(row.splice(0)); };
+  for (let i=0;i<text.length;i++) {
+    const c=text[i], next=text[i+1];
+    if (quoted) {
+      if (c === '"' && next === '"') { field.push('"'); i++; }
+      else if (c === '"') quoted = false;
+      else field.push(c);
+    } else if (c === '"') quoted = true;
+    else if (c === ",") pushField();
+    else if (c === "\n") pushRow();
+    else if (c !== "\r") field.push(c);
+  }
+  if (field.length || row.length) pushRow();
+  if (!rows.length) return [];
+  const headers = rows.shift().map((h) => h.trim());
+  return rows.filter((r) => r.some((v) => v !== "")).map((r) => Object.fromEntries(headers.map((h,i) => [h,r[i] ?? ""])));
 }
-
-async function fetchJSON(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
-  return response.json();
+async function fetchCSV(name) {
+  for (const root of DATA_ROOTS) {
+    try {
+      const response = await fetch(root + name, {cache:"force-cache"});
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (!text.trim()) continue;
+      return csvRows(text);
+    } catch (error) {
+      console.warn("CSV source failed",root,name,error);
+    }
+  }
+  throw new Error(`Could not load ${name} from the PokeAPI GitHub repository`);
 }
-async function cachedJSON(url,key=url) {
-  if (state.cache.has(key)) return state.cache.get(key);
-  const promise = fetchJSON(url).catch((error) => { state.cache.delete(key); throw error; });
-  state.cache.set(key,promise);
+async function cachedCSV(name) {
+  if (state.cache.has(name)) return state.cache.get(name);
+  const promise = fetchCSV(name).catch((error) => { state.cache.delete(name); throw error; });
+  state.cache.set(name,promise);
   return promise;
 }
-function fallbackGenerationForId(id) {
+function generationForId(id) {
   const match = GENERATION_RANGES.find(([min,max]) => id >= min && id <= max);
   return match ? match[2] : 0;
 }
-function fallbackRegionForGeneration(generation) {
-  return GENERATION_RANGES.find(([, ,gen]) => gen === generation)?.[3] || "";
+function regionForId(id) {
+  const match = GENERATION_RANGES.find(([min,max]) => id >= min && id <= max);
+  return match ? match[3] : "";
 }
-function generationNumber(data) { return Number(data?.url?.match(/generation\/(\d+)/)?.[1] || 0); }
-
 function populateFilters() {
   els.generation.innerHTML = '<option value="">All generations</option>' +
     GENERATION_RANGES.map(([, ,gen]) => `<option value="${gen}">Generation ${GEN_ROMAN[gen]}</option>`).join("");
@@ -93,383 +106,317 @@ function populateFilters() {
   els.type.innerHTML = '<option value="">All types</option>' +
     TYPE_NAMES.map((type) => `<option value="${type}">${titleCase(type)}</option>`).join("");
 }
-
-function getGeneration(item) {
-  return state.generationBySpecies.get(item.name) || fallbackGenerationForId(item.id);
-}
-function getRegion(item) {
-  const generation = getGeneration(item);
-  return state.regionByGeneration.get(generation) || fallbackRegionForGeneration(generation);
-}
-
-function matchesFilters(item) {
+function matches(item) {
   const q = state.query.trim().toLowerCase().replace(/^#/,"");
-  const types = state.typeBySpecies.get(item.id) || [];
-  if (q && !String(item.id).includes(q) && !item.name.includes(q) && !formatSpeciesName(item.name).toLowerCase().includes(q)) return false;
-  if (state.generation && getGeneration(item) !== Number(state.generation)) return false;
-  if (state.region && getRegion(item) !== state.region) return false;
+  const types = state.typesByPokemon.get(item.id) || [];
+  if (q && !String(item.id).includes(q) && !item.identifier.includes(q) && !formatSpeciesName(item.identifier).toLowerCase().includes(q)) return false;
+  if (state.generation && generationForId(item.id) !== Number(state.generation)) return false;
+  if (state.region && regionForId(item.id) !== state.region) return false;
   if (state.type && !types.includes(state.type)) return false;
   return true;
 }
-
 function renderCatalog() {
-  let results = state.species.filter(matchesFilters);
-  if (state.sort === "name") results.sort((a,b) => formatSpeciesName(a.name).localeCompare(formatSpeciesName(b.name)));
-  else if (state.sort === "nameDesc") results.sort((a,b) => formatSpeciesName(b.name).localeCompare(formatSpeciesName(a.name)));
-  else results.sort((a,b) => a.id - b.id);
+  let results = state.pokemon.filter(matches);
+  if (state.sort === "name") results.sort((a,b) => formatSpeciesName(a.identifier).localeCompare(formatSpeciesName(b.identifier)));
+  else if (state.sort === "nameDesc") results.sort((a,b) => formatSpeciesName(b.identifier).localeCompare(formatSpeciesName(a.identifier)));
+  else results.sort((a,b) => a.id-b.id);
   state.currentResults = results;
   els.resultCount.textContent = results.length.toLocaleString();
-  els.empty.classList.toggle("hidden", results.length !== 0);
+  els.empty.classList.toggle("hidden",results.length > 0);
   els.catalog.innerHTML = results.map((item) => {
-    const gen = getGeneration(item);
-    const types = state.typeBySpecies.get(item.id) || [];
-    return `
-      <button class="pokemon-card" type="button" data-id="${item.id}" aria-label="Open ${formatSpeciesName(item.name)} details">
-        <div class="card-top"><span class="dex-no">#${String(item.id).padStart(4,"0")}</span><span class="card-gen">${gen ? `GEN ${GEN_ROMAN[gen] || gen}` : ""}</span></div>
-        <div class="card-art"><img loading="lazy" src="${spriteUrl(item.id)}" onerror="this.src='${SPRITES}/${item.id}.png';this.onerror=null" alt="${formatSpeciesName(item.name)}"></div>
-        <div class="card-name">${formatSpeciesName(item.name)}</div>
-        <div class="type-list" data-types-for="${item.id}">${typeBadges(types) || '<span class="text-chip">Loading type…</span>'}</div>
-      </button>`;
+    const gen = generationForId(item.id);
+    const types = state.typesByPokemon.get(item.id) || [];
+    return `<button class="pokemon-card" type="button" data-id="${item.id}">
+      <div class="card-top"><span class="dex-no">#${String(item.id).padStart(4,"0")}</span><span class="card-gen">GEN ${GEN_ROMAN[gen]}</span></div>
+      <div class="card-art"><img loading="lazy" src="${spriteUrl(item.id)}" onerror="this.src='${SPRITES}/${item.id}.png';this.onerror=null" alt="${formatSpeciesName(item.identifier)}"></div>
+      <div class="card-name">${formatSpeciesName(item.identifier)}</div>
+      <div class="type-list">${typeBadges(types) || '<span class="text-chip">Type unavailable</span>'}</div>
+    </button>`;
   }).join("");
-  hydrateVisibleTypes(results);
 }
-
-async function hydrateVisibleTypes(results) {
-  // Load card typings in small batches so a single failed request cannot blank the catalog.
-  const visible = results.slice(0, 80);
-  for (let i = 0; i < visible.length; i += 10) {
-    const batch = visible.slice(i, i + 10);
-    await Promise.allSettled(batch.map(async (item) => {
-      if (state.typeBySpecies.has(item.id)) return;
-      try {
-        const pokemon = await cachedJSON(`${API}/pokemon/${item.id}`,`pokemon:${item.id}`);
-        state.typeBySpecies.set(item.id, pokemon.types.map((entry) => entry.type.name));
-        const target = els.catalog.querySelector(`[data-types-for="${item.id}"]`);
-        if (target) target.innerHTML = typeBadges(pokemon.types);
-      } catch {
-        const target = els.catalog.querySelector(`[data-types-for="${item.id}"]`);
-        if (target) target.innerHTML = '<span class="text-chip">Type unavailable</span>';
-      }
-    }));
-  }
-}
-
-async function loadTypeFilter(type) {
-  if (!type || state.typeLoading.has(type) || state.typeMeta.has(type)) return;
-  state.typeLoading.add(type);
+async function loadAbilityData() {
+  if (state.abilities.size) return;
   try {
-    const data = await fetchJSON(`${API}/type/${type}`);
-    state.typeMeta.set(type,data);
-    for (const entry of data.pokemon || []) {
-      const id = idFromUrl(entry.pokemon?.url);
-      if (!id || id > 1025) continue;
-      const current = state.typeBySpecies.get(id) || [];
-      if (!current.includes(type)) current.push(type);
-      state.typeBySpecies.set(id,current);
+    const [abilities, prose] = await Promise.all([cachedCSV("abilities.csv"),cachedCSV("ability_prose.csv")]);
+    const descriptions = new Map(prose.filter((r) => r.local_language_id === "9").map((r) => [Number(r.ability_id),cleanText(r.short_effect || r.effect)]));
+    for (const row of abilities) state.abilities.set(Number(row.id),{name:row.identifier,description:descriptions.get(Number(row.id)) || "No English description available."});
+  } catch (error) { console.warn("Ability data unavailable",error); }
+}
+async function loadDetailData() {
+  if (state.detailLoaded) return;
+  if (state.detailLoading) return state.detailLoading;
+  state.detailLoading = (async () => {
+    const jobs = [
+      ["species", "pokemon_species.csv"],
+      ["stats", "pokemon_stats.csv"],
+      ["abilities", "pokemon_abilities.csv"],
+      ["moves", "moves.csv"],
+      ["pokemonMoves", "pokemon_moves.csv"],
+      ["evolution", "pokemon_evolution.csv"],
+      ["types", "types.csv"],
+      ["efficacy", "type_efficacy.csv"],
+      ["flavor", "pokemon_species_flavor_text.csv"],
+      ["speciesProse", "pokemon_species_prose.csv"]
+    ];
+    const values = await Promise.all(jobs.map(async ([key,file]) => [key,await cachedCSV(file).catch(() => [])]));
+    const data = Object.fromEntries(values);
+    state.speciesRows = data.species;
+    state.evolutionRows = data.evolution;
+    const flavor = data.flavor.filter((r) => r.language_id === "9");
+    const prose = data.speciesProse.filter((r) => r.local_language_id === "9");
+    state.speciesRows.forEach((row) => {
+      row.englishFlavor = flavor.filter((x) => Number(x.species_id) === Number(row.id));
+      row.englishProse = prose.find((x) => Number(x.pokemon_species_id) === Number(row.id)) || null;
+    });
+    for (const row of data.stats) {
+      const list = state.statsByPokemon.get(Number(row.pokemon_id)) || [];
+      list.push({id:Number(row.stat_id),base:Number(row.base_stat),effort:Number(row.effort)});
+      state.statsByPokemon.set(Number(row.pokemon_id),list);
     }
-  } catch (error) {
-    console.warn("Type filter failed:",type,error);
-  } finally {
-    state.typeLoading.delete(type);
-  }
-  if (state.type === type) renderCatalog();
-}
-
-async function loadOptionalMetadata() {
-  const generationTask = fetchJSON(`${API}/generation?limit=100`).catch(() => null);
-  const typeTask = fetchJSON(`${API}/type?limit=100`).catch(() => null);
-  const [generationIndex,typeIndex] = await Promise.all([generationTask,typeTask]);
-
-  if (generationIndex?.results?.length) {
-    const generationResults = await Promise.allSettled(generationIndex.results.map((resource) => fetchJSON(resource.url)));
-    for (const result of generationResults) {
-      if (result.status !== "fulfilled") continue;
-      const data = result.value;
-      const id = data.id;
-      state.regionByGeneration.set(id,data.main_region?.name || fallbackRegionForGeneration(id));
-      for (const species of data.pokemon_species || []) state.generationBySpecies.set(species.name,id);
+    for (const row of data.abilities) {
+      const list = state.abilitiesByPokemon.get(Number(row.pokemon_id)) || [];
+      list.push({id:Number(row.ability_id),hidden:row.is_hidden === "1",slot:Number(row.slot)});
+      state.abilitiesByPokemon.set(Number(row.pokemon_id),list);
     }
-  }
-
-  // Type metadata is optional. The site can already render without it.
-  if (typeIndex?.results?.length) {
-    const typeResults = await Promise.allSettled(typeIndex.results.map((resource) => fetchJSON(resource.url)));
-    for (const result of typeResults) {
-      if (result.status !== "fulfilled") continue;
-      const data = result.value;
-      if (TYPE_NAMES.includes(data.name) && data.damage_relations) state.typeMeta.set(data.name,data);
+    for (const row of data.moves) {
+      state.moves.set(Number(row.id),{name:row.identifier,generation:Number(row.generation_id),type:Number(row.type_id),power:row.power ? Number(row.power) : null,pp:row.pp ? Number(row.pp) : null,accuracy:row.accuracy ? Number(row.accuracy) : null,priority:Number(row.priority||0)});
     }
-  }
-  populateFilters();
-  renderCatalog();
-}
-
-function setStatus(message,tone="success") {
-  els.status.textContent = message;
-  els.status.style.color = tone === "error" ? "var(--danger)" : tone === "loading" ? "var(--warning)" : "var(--success)";
-  els.status.style.background = tone === "error" ? "rgba(251,113,133,.1)" : tone === "loading" ? "rgba(251,191,36,.1)" : "rgba(52,211,153,.1)";
-}
-
-function setTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem("poke-theme",theme); } catch {}
-  els.theme.textContent = theme === "light" ? "☀" : "☾";
-}
-
-async function initCatalog() {
-  setStatus("Loading catalog…","loading");
-  try {
-    let index;
-    try {
-      index = await fetchJSON(`${API}/pokemon-species?limit=2000`);
-    } catch {
-      index = await fetchJSON(`${API}/pokemon?limit=2000`);
+    const movesByPokemon = new Map();
+    for (const row of data.pokemonMoves) {
+      const id = Number(row.pokemon_id);
+      const list = movesByPokemon.get(id) || [];
+      list.push({moveId:Number(row.move_id),versionGroup:Number(row.version_group_id),method:Number(row.pokemon_move_method_id),level:Number(row.level)});
+      movesByPokemon.set(id,list);
     }
-
-    state.species = (index.results || [])
-      .map((item) => ({ name:item.name,id:idFromUrl(item.url),url:item.url }))
-      .filter((item) => item.id && item.id <= 1025)
-      .sort((a,b) => a.id - b.id);
-
-    if (!state.species.length) throw new Error("The API returned an empty catalog.");
-
-    // Render immediately. Optional metadata must never prevent the catalog from appearing.
-    populateFilters();
-    renderCatalog();
-    setStatus(`${state.species.length.toLocaleString()} Pokémon indexed`);
-
-    // Enrich in the background.
-    await loadOptionalMetadata();
-    setStatus(`${state.species.length.toLocaleString()} Pokémon indexed`);
-    const hashId = Number(location.hash.match(/(?:pokemon|p)=(\d+)/)?.[1] || 0);
-    if (hashId) openDetail(hashId);
-  } catch (error) {
-    console.error(error);
-    setStatus("Could not load data","error");
-    els.catalog.innerHTML = `<div class="error-box" style="grid-column:1/-1"><strong>PokéAPI could not be reached.</strong><br>Check your connection or try reloading the page.</div>`;
-  }
+    state.movesByPokemon = movesByPokemon;
+    for (const row of data.types) TYPE_IDS.set(Number(row.id),row.identifier);
+    for (const row of data.efficacy) {
+      const attacker = TYPE_IDS.get(Number(row.damage_type_id)), defender = TYPE_IDS.get(Number(row.target_type_id));
+      if (!attacker || !defender) continue;
+      const map = state.typeMeta.get(attacker) || new Map();
+      map.set(defender,Number(row.damage_factor)/100);
+      state.typeMeta.set(attacker,map);
+    }
+    state.detailLoaded = true;
+    state.detailLoading = null;
+  })().catch((error) => { state.detailLoading = null; throw error; });
+  return state.detailLoading;
 }
-
-function statMarkup(stats) {
-  const total = (stats || []).reduce((sum,s) => sum + (s.base_stat || 0),0);
-  const rows = (stats || []).map((stat) => {
-    const value = stat.base_stat || 0, pct = Math.min(100,(value/255)*100);
-    return `<div class="stat-row"><span>${STAT_NAMES[stat.stat.name] || titleCase(stat.stat.name)}</span><span class="stat-num">${value}</span><div class="stat-track"><div class="stat-fill" style="width:${pct}%"></div></div></div>`;
-  }).join("");
-  return `<div class="stats-wrap">${rows}<div class="total-stat"><span>Base stat total</span><span>${total}</span></div></div>`;
-}
-function damageMultiplier(attacker,defenderTypes) {
-  let multiplier = 1;
-  for (const defender of defenderTypes) {
-    const targetData = state.typeMeta.get(defender);
-    if (!targetData) continue;
-    if ((targetData.damage_relations.double_damage_from || []).some((x) => x.name === attacker)) multiplier *= 2;
-    if ((targetData.damage_relations.half_damage_from || []).some((x) => x.name === attacker)) multiplier *= .5;
-    if ((targetData.damage_relations.no_damage_from || []).some((x) => x.name === attacker)) multiplier *= 0;
-  }
-  return multiplier;
+function getSpecies(id) {
+  const pokemon = state.pokemon.find((p) => p.id === id);
+  const speciesId = Number(pokemon?.species_id || id);
+  return state.speciesRows.find((s) => Number(s.id) === speciesId) || null;
 }
 function effectivenessMarkup(types) {
-  if (!TYPE_NAMES.every((type) => state.typeMeta.has(type))) return '<div class="info-card"><span style="color:var(--muted);font-size:.77rem">Type matchup data is still loading. This section will populate shortly.</span></div>';
-  const incoming = TYPE_NAMES.map((attacker) => ({attacker,mult:damageMultiplier(attacker,types)}));
-  const weak = incoming.filter((x) => x.mult > 1).sort((a,b) => b.mult-a.mult);
-  const resist = incoming.filter((x) => x.mult > 0 && x.mult < 1).sort((a,b) => a.mult-b.mult);
-  const immune = incoming.filter((x) => x.mult === 0);
+  if (!state.typeMeta.size) return '<div class="info-card"><span style="color:var(--muted);font-size:.77rem">Type matchup data is unavailable.</span></div>';
+  const entries = [];
+  for (const attacker of TYPE_NAMES) {
+    let mult = 1;
+    for (const defender of types) mult *= state.typeMeta.get(attacker)?.get(defender) ?? 1;
+    entries.push({attacker,mult});
+  }
+  const weak = entries.filter((x) => x.mult > 1), resist = entries.filter((x) => x.mult > 0 && x.mult < 1), immune = entries.filter((x) => x.mult === 0);
   const group = (items) => items.map((x) => `<span class="effect-tag">${titleCase(x.attacker)} · ${x.mult}×</span>`).join("") || "<p>None</p>";
   return `<div class="effect-grid"><div class="effect-card"><h3>Weak to</h3><div class="effect-list">${group(weak)}</div></div><div class="effect-card"><h3>Resists</h3><div class="effect-list">${group(resist)}</div></div><div class="effect-card"><h3>Immune to</h3><div class="effect-list">${group(immune)}</div></div></div>`;
 }
-async function getAbility(name,url) {
-  if (state.abilityCache.has(name)) return state.abilityCache.get(name);
-  const promise = fetchJSON(url).catch((error) => { state.abilityCache.delete(name); throw error; });
-  state.abilityCache.set(name,promise);
-  return promise;
+function statMarkup(pokemonId) {
+  const stats = state.statsByPokemon.get(pokemonId) || [];
+  const total = stats.reduce((sum,x) => sum+x.base,0);
+  const rows = [...stats].sort((a,b) => a.id-b.id).map((x) => {
+    const key = STAT_IDS[x.id] || "", value=x.base, pct=Math.min(100,value/255*100);
+    return `<div class="stat-row"><span>${STAT_NAMES[key] || titleCase(key)}</span><span class="stat-num">${value}</span><div class="stat-track"><div class="stat-fill" style="width:${pct}%"></div></div></div>`;
+  }).join("");
+  return `<div class="stats-wrap">${rows}<div class="total-stat"><span>Base stat total</span><span>${total}</span></div></div>`;
 }
-function abilityDescription(data) {
-  const entry = (data.effect_entries || []).find((x) => x.language?.name === "en");
-  return cleanText(entry?.short_effect || entry?.effect || "No English description was provided.");
+function abilityMarkup(pokemonId) {
+  const rows = state.abilitiesByPokemon.get(pokemonId) || [];
+  return `<div class="detail-grid">${rows.sort((a,b)=>a.slot-b.slot).map((row) => {
+    const ability = state.abilities.get(row.id);
+    return `<div class="info-card"><h3>${titleCase(ability?.name || `Ability #${row.id}`)}${row.hidden ? " · Hidden" : ""}</h3><p style="margin:0;color:var(--muted);font-size:.78rem;line-height:1.55">${ability?.description || "Description unavailable."}</p></div>`;
+  }).join("") || '<div class="info-card">No ability data available.</div>'}</div>`;
 }
-function moveListMarkup(pokemon) {
-  const moves = [];
-  for (const entry of pokemon.moves || []) for (const detail of entry.version_group_details || []) moves.push({
-    name:entry.move.name,method:titleCase(detail.move_learn_method?.name || "other"),
-    level:detail.level_learned_at || 0,version:titleCase(detail.version_group?.name || "")
-  });
-  moves.sort((a,b) => a.name.localeCompare(b.name) || a.method.localeCompare(b.method) || a.level-b.level);
+function evolutionMarkup(speciesId) {
+  const outgoing = state.evolutionRows.filter((row) => Number(row.evolved_species_id) && Number(row.evolves_from_species_id || row.evolved_species_id) === Number(row.evolved_species_id));
+  const family = [];
+  const seen = new Set([speciesId]);
+  const queue=[speciesId];
+  while(queue.length){
+    const current=queue.shift();
+    for(const row of state.evolutionRows){
+      const to=Number(row.evolved_species_id), from=Number(row.evolves_from_species_id || 0);
+      if(from===current && !seen.has(to)){seen.add(to);queue.push(to);}
+      if(to===current && from && !seen.has(from)){seen.add(from);queue.push(from);}
+    }
+  }
+  for(const id of [...seen].sort((a,b)=>a-b)){
+    const species=state.speciesRows.find((s)=>Number(s.id)===id); if(species) family.push(species);
+  }
+  if(!family.length) return '<div class="info-card">No evolution data.</div>';
+  return `<div class="evolution-track">${family.map((species,index)=>{
+    const mon=state.pokemon.find((p)=>Number(p.species_id)===Number(species.id)&&p.is_default);
+    if(!mon) return "";
+    const reqRows=state.evolutionRows.filter((r)=>Number(r.evolved_species_id)===Number(species.id));
+    let req="Base form";
+    if(index) {
+      const r=reqRows[0];
+      const bits=[];
+      if(r?.minimum_level) bits.push(`Level ${r.minimum_level}+`);
+      if(r?.trigger_item_id) bits.push(`Item #${r.trigger_item_id}`);
+      if(r?.held_item_id) bits.push(`Hold item #${r.held_item_id}`);
+      if(r?.time_of_day) bits.push(titleCase(r.time_of_day));
+      if(r?.minimum_happiness) bits.push(`Happiness ${r.minimum_happiness}+`);
+      if(r?.minimum_affection) bits.push(`Affection ${r.minimum_affection}+`);
+      if(r?.gender_id) bits.push(r.gender_id === "1" ? "Female" : "Male");
+      req=bits.join(" · ") || "Special condition";
+    }
+    return `${index ? '<div class="evo-arrow">→</div>' : ""}<button class="evo-node" data-id="${mon.id}" type="button"><img loading="lazy" src="${spriteUrl(mon.id)}" alt="${formatSpeciesName(mon.identifier)}"><strong>${formatSpeciesName(mon.identifier)}</strong><small>${req}</small></button>`;
+  }).join("")}</div>`;
+}
+function movesMarkup(pokemonId) {
+  const rows = state.movesByPokemon?.get(pokemonId) || [];
   const unique = new Map();
-  for (const move of moves) {
-    const key = `${move.name}|${move.method}|${move.level}|${move.version}`;
-    if (!unique.has(key)) unique.set(key,move);
-  }
-  return [...unique.values()].map((move) => `<div class="move-row"><strong>${titleCase(move.name)}</strong><span>${move.method}</span><span>${move.level ? `Lv. ${move.level}` : move.version}</span></div>`).join("");
+  rows.forEach((row) => {
+    const move = state.moves.get(row.moveId); if(!move) return;
+    const key=`${move.name}|${row.method}|${row.level}|${row.versionGroup}`;
+    if(!unique.has(key)) unique.set(key,{...move,level:row.level,method:row.method,versionGroup:row.versionGroup});
+  });
+  return `<div class="moves-box">${[...unique.values()].sort((a,b)=>a.name.localeCompare(b.name)).map((move)=>`<div class="move-row"><strong>${titleCase(move.name)}</strong><span>${move.power ? `${move.power} power` : "Status"}</span><span>${move.pp ? `${move.pp} PP` : ""}</span></div>`).join("") || '<div class="info-card">No move data available.</div>'}</div>`;
 }
-function flattenEvolution(node,out=[],depth=0,parent="") {
-  if (!node) return out;
-  out.push({species:node.species,depth,parent,details:node.evolution_details || []});
-  for (const next of node.evolves_to || []) flattenEvolution(next,out,depth+1,node.species.name);
-  return out;
+function formsMarkup(speciesId) {
+  const forms=state.pokemon.filter((p)=>Number(p.species_id)===Number(speciesId));
+  if(!forms.length) return '<div class="info-card">No varieties recorded.</div>';
+  return `<div class="form-grid">${forms.map((p)=>`<button class="form-card" type="button" data-id="${p.id}"><img loading="lazy" src="${spriteUrl(p.id)}" onerror="this.src='${SPRITES}/${p.id}.png';this.onerror=null" alt="${formatSpeciesName(p.identifier)}"><strong>${formatSpeciesName(p.identifier)}${p.is_default ? " · default" : ""}</strong></button>`).join("")}</div>`;
 }
-function evolutionRequirement(details) {
-  if (!details?.length) return "Base form";
-  const labels = new Set();
-  for (const d of details) {
-    if (d.min_level) labels.add(`Level ${d.min_level}+`);
-    if (d.item?.name) labels.add(titleCase(d.item.name));
-    if (d.held_item?.name) labels.add(`Hold ${titleCase(d.held_item.name)}`);
-    if (d.trigger?.name && d.trigger.name !== "level-up") labels.add(titleCase(d.trigger.name));
-    if (d.time_of_day) labels.add(titleCase(d.time_of_day));
-    if (d.min_happiness) labels.add(`Happiness ${d.min_happiness}+`);
-    if (d.min_affection) labels.add(`Affection ${d.min_affection}+`);
-    if (d.known_move?.name) labels.add(`Know ${titleCase(d.known_move.name)}`);
-    if (d.known_move_type?.name) labels.add(`Know a ${titleCase(d.known_move_type.name)} move`);
-    if (d.location?.name) labels.add(`At ${titleCase(d.location.name)}`);
-    if (d.gender === 1) labels.add("Female");
-    if (d.gender === 2) labels.add("Male");
-    if (d.relative_physical_stats === 1) labels.add("Attack > Defense");
-    if (d.relative_physical_stats === -1) labels.add("Attack < Defense");
-    if (d.turn_upside_down) labels.add("Hold upside down");
-  }
-  return [...labels].join(" · ") || "Special condition";
-}
-function evolutionMarkup(chain) {
-  const flat = flattenEvolution(chain);
-  if (!flat.length) return '<div class="info-card">No evolution chain data.</div>';
-  return `<div class="evolution-track">${flat.map((node,index) => {
-    const id = idFromUrl(node.species.url);
-    return `${index ? '<div class="evo-arrow">→</div>' : ""}<button class="evo-node" data-id="${id}" type="button"><img loading="lazy" src="${spriteUrl(id)}" onerror="this.src='${SPRITES}/${id}.png';this.onerror=null" alt="${formatSpeciesName(node.species.name)}"><strong>${formatSpeciesName(node.species.name)}</strong><small>${index===0 ? "Base" : evolutionRequirement(node.details)}</small></button>`;
-  }).join("")}</div>`;
-}
-function formsMarkup(species) {
-  const varieties = species.varieties || [];
-  if (!varieties.length) return '<div class="info-card">No alternate varieties recorded.</div>';
-  return `<div class="form-grid">${varieties.map((v) => {
-    const id = idFromUrl(v.pokemon.url);
-    return `<button class="form-card" type="button" data-id="${id}"><img loading="lazy" src="${spriteUrl(id)}" onerror="this.src='${SPRITES}/${id}.png';this.onerror=null" alt="${titleCase(v.pokemon.name)}"><strong>${titleCase(v.pokemon.name)}${v.is_default ? " · default" : ""}</strong></button>`;
-  }).join("")}</div>`;
-}
-function speciesFacts(species,pokemon) {
-  const rate = species.gender_rate;
-  let gender = "Genderless";
-  if (rate >= 0) { const female = (rate/8)*100; gender = `${100-female}% male · ${female}% female`; }
-  const classification = species.is_legendary ? "Legendary" : species.is_mythical ? "Mythical" : species.is_baby ? "Baby" : "Standard";
+function speciesInfoMarkup(species,pokemon) {
+  const genderRate=Number(species?.gender_rate);
+  const gender=genderRate<0 ? "Genderless" : `${100-(genderRate/8)*100}% male · ${(genderRate/8)*100}% female`;
+  const classification=species?.is_legendary==="1" ? "Legendary" : species?.is_mythical==="1" ? "Mythical" : species?.is_baby==="1" ? "Baby" : "Standard";
+  const region=regionForId(pokemon.id);
   return `<div class="detail-grid">
     <div class="info-card"><h3>Biology</h3><div class="info-lines">
-      <div class="info-line"><span>Genus</span><span>${cleanText(species.genera?.find((x)=>x.language?.name==="en")?.genus || "—")}</span></div>
-      <div class="info-line"><span>Color</span><span>${titleCase(species.color?.name || "—")}</span></div>
-      <div class="info-line"><span>Shape</span><span>${titleCase(species.shape?.name || "—")}</span></div>
-      <div class="info-line"><span>Habitat</span><span>${titleCase(species.habitat?.name || "Unknown")}</span></div>
+      <div class="info-line"><span>Region</span><span>${titleCase(region)}</span></div>
       <div class="info-line"><span>Classification</span><span>${classification}</span></div>
+      <div class="info-line"><span>Color ID</span><span>${species?.color_id || "—"}</span></div>
+      <div class="info-line"><span>Shape ID</span><span>${species?.shape_id || "—"}</span></div>
+      <div class="info-line"><span>Habitat ID</span><span>${species?.habitat_id || "—"}</span></div>
     </div></div>
     <div class="info-card"><h3>Breeding & catching</h3><div class="info-lines">
       <div class="info-line"><span>Gender</span><span>${gender}</span></div>
-      <div class="info-line"><span>Capture rate</span><span>${species.capture_rate ?? "—"} / 255</span></div>
-      <div class="info-line"><span>Base happiness</span><span>${species.base_happiness ?? "—"}</span></div>
-      <div class="info-line"><span>Hatch cycles</span><span>${species.hatch_counter ?? "—"}</span></div>
-      <div class="info-line"><span>Growth rate</span><span>${titleCase(species.growth_rate?.name || "—")}</span></div>
+      <div class="info-line"><span>Capture rate</span><span>${species?.capture_rate || "—"} / 255</span></div>
+      <div class="info-line"><span>Base happiness</span><span>${species?.base_happiness || "—"}</span></div>
+      <div class="info-line"><span>Hatch cycles</span><span>${species?.hatch_counter || "—"}</span></div>
+      <div class="info-line"><span>Growth rate ID</span><span>${species?.growth_rate_id || "—"}</span></div>
     </div></div>
     <div class="info-card"><h3>Physical</h3><div class="info-lines">
-      <div class="info-line"><span>Height</span><span>${(pokemon.height/10).toFixed(1)} m</span></div>
-      <div class="info-line"><span>Weight</span><span>${(pokemon.weight/10).toFixed(1)} kg</span></div>
-      <div class="info-line"><span>Base experience</span><span>${pokemon.base_experience ?? "—"}</span></div>
-      <div class="info-line"><span>Order</span><span>${pokemon.order ?? "—"}</span></div>
+      <div class="info-line"><span>Height</span><span>${(Number(pokemon.height)/10).toFixed(1)} m</span></div>
+      <div class="info-line"><span>Weight</span><span>${(Number(pokemon.weight)/10).toFixed(1)} kg</span></div>
+      <div class="info-line"><span>Base experience</span><span>${pokemon.base_experience || "—"}</span></div>
+      <div class="info-line"><span>Default form</span><span>${pokemon.is_default === "1" ? "Yes" : "No"}</span></div>
     </div></div>
-    <div class="info-card"><h3>Egg groups</h3><div class="chip-wrap">${(species.egg_groups||[]).map((g)=>`<span class="text-chip">${titleCase(g.name)}</span>`).join("") || '<span class="text-chip">None</span>'}</div></div>
+    <div class="info-card"><h3>Egg groups / flags</h3><div class="info-lines">
+      <div class="info-line"><span>Gender differences</span><span>${species?.has_gender_differences==="1" ? "Yes" : "No"}</span></div>
+      <div class="info-line"><span>Forms switchable</span><span>${species?.forms_switchable==="1" ? "Yes" : "No"}</span></div>
+      <div class="info-line"><span>Evolution chain ID</span><span>${species?.evolution_chain_id || "—"}</span></div>
+    </div></div>
   </div>`;
 }
-function pastDataMarkup(pokemon) {
-  const sections = [];
-  if ((pokemon.past_types||[]).length) sections.push(`<details class="disclosure"><summary>Past typings</summary><div class="chip-wrap" style="padding-bottom:12px">${pokemon.past_types.map((x)=>`<span class="text-chip"><strong>${titleCase(x.generation?.name||"")}</strong> ${typeBadges(x.types||[])}</span>`).join("")}</div></details>`);
-  if ((pokemon.past_abilities||[]).length) sections.push(`<details class="disclosure"><summary>Past abilities</summary><div class="chip-wrap" style="padding-bottom:12px">${pokemon.past_abilities.map((x)=>`<span class="text-chip"><strong>${titleCase(x.generation?.name||"")}</strong> ${(x.abilities||[]).map((a)=>titleCase(a.ability?.name||"None")).join(", ")}</span>`).join("")}</div></details>`);
-  if ((pokemon.past_stats||[]).length) sections.push(`<details class="disclosure"><summary>Historical base stats</summary><div class="chip-wrap" style="padding-bottom:12px">${pokemon.past_stats.map((x)=>`<span class="text-chip"><strong>${titleCase(x.generation?.name||"")}</strong> ${x.stats?.map((s)=>`${STAT_NAMES[s.stat?.name]||titleCase(s.stat?.name)} ${s.base_stat}`).join(" · ")}</span>`).join("")}</div></details>`);
-  return sections.join("");
-}
-function dexTextMarkup(species) {
-  const entries = [...(species.flavor_text_entries||[])].filter((x)=>x.language?.name==="en");
+function flavorMarkup(species) {
+  const entries=(species?.englishFlavor||[]).slice(-30);
   const unique=[],seen=new Set();
-  for (const entry of entries) {
-    const text=cleanText(entry.flavor_text); if (!text || seen.has(text)) continue;
-    seen.add(text); unique.push({text,version:titleCase(entry.version?.name||"")});
-  }
-  return `<details class="disclosure" open><summary>Pokédex entries (${unique.length})</summary><div style="display:grid;gap:8px;padding-bottom:12px">${unique.map((x)=>`<div class="text-chip" style="display:block;line-height:1.5"><strong>${x.version}</strong><br>${x.text}</div>`).join("") || '<div class="text-chip">No English entries available.</div>'}</div></details>`;
-}
-async function loadDetail(id) {
-  const pokemon = await cachedJSON(`${API}/pokemon/${id}`,`pokemon:${id}`);
-  let species;
-  try {
-    species = await cachedJSON(`${API}/pokemon-species/${id}`,`species:${id}`);
-  } catch {
-    species = await cachedJSON(`${API}/pokemon/${id}`,`pokemon:${id}`);
-  }
-  const evo = species.evolution_chain?.url ? await cachedJSON(species.evolution_chain.url,`evo:${species.evolution_chain.url}`).catch(() => null) : null;
-  return {pokemon,species,evo};
+  for(const row of entries){const text=cleanText(row.flavor_text);if(!text||seen.has(text))continue;seen.add(text);unique.push({text,version:row.version_id});}
+  return `<details class="disclosure" open><summary>Pokédex entries (${unique.length})</summary><div style="display:grid;gap:8px;padding-bottom:12px">${unique.map((x)=>`<div class="text-chip" style="display:block;line-height:1.5"><strong>Version #${x.version}</strong><br>${x.text}</div>`).join("") || '<div class="text-chip">No English entries available in the repository data.</div>'}</div></details>`;
 }
 async function openDetail(id) {
-  if (!id) return;
+  if(!id)return;
   els.overlay.classList.remove("hidden");els.panel.classList.add("open");els.panel.setAttribute("aria-hidden","false");
-  document.body.style.overflow="hidden";els.detail.innerHTML='<div class="loading"><div><div class="spinner"></div>Loading Pokémon data…</div></div>';
-  els.crumb.textContent = `Pokémon #${String(id).padStart(4,"0")}`;
+  document.body.style.overflow="hidden";els.detail.innerHTML='<div class="loading"><div><div class="spinner"></div>Loading repository data…</div></div>';
+  els.crumb.textContent=`Pokémon #${String(id).padStart(4,"0")}`;
   history.replaceState(null,"",`#pokemon=${id}`);
   try {
-    const {pokemon,species,evo} = await loadDetail(id);
-    const abilityData = await Promise.all((pokemon.abilities||[]).map((a)=>getAbility(a.ability.name,a.ability.url).catch(()=>null)));
-    const types = (pokemon.types||[]).map((t)=>t.type.name);
-    const abilities = (pokemon.abilities||[]).map((a,i)=>({name:a.ability.name,hidden:a.is_hidden,description:abilityDescription(abilityData[i]||{})}));
-    state.typeBySpecies.set(id,types);
-    els.detail.innerHTML = `
+    await loadDetailData(); await loadAbilityData();
+    const pokemon=state.pokemon.find((p)=>p.id===id), species=getSpecies(id);
+    if(!pokemon||!species) throw new Error("Pokemon was not found in repository data");
+    const types=state.typesByPokemon.get(id)||[];
+    const flavor=cleanText(species.englishFlavor?.at(-1)?.flavor_text||"");
+    els.detail.innerHTML=`
       <section class="detail-hero">
-        <div class="detail-art"><img src="${spriteUrl(pokemon.id)}" onerror="this.src='${SPRITES}/${pokemon.id}.png';this.onerror=null" alt="${formatSpeciesName(species.name)} official artwork"></div>
+        <div class="detail-art"><img src="${spriteUrl(pokemon.id)}" onerror="this.src='${SPRITES}/${pokemon.id}.png';this.onerror=null" alt="${formatSpeciesName(pokemon.identifier)} official artwork"></div>
         <div class="detail-heading">
-          <div class="eyebrow">${generationNumber(species) ? `GENERATION ${GEN_ROMAN[generationNumber(species)] || generationNumber(species)}` : "POKÉMON SPECIES"}</div>
-          <h1 id="detailTitle">${formatSpeciesName(species.name)}</h1>
+          <div class="eyebrow">GENERATION ${GEN_ROMAN[generationForId(pokemon.id)] || generationForId(pokemon.id)}</div>
+          <h1 id="detailTitle">${formatSpeciesName(species.identifier)}</h1>
           <div class="dex">National Dex #${String(pokemon.id).padStart(4,"0")}</div>
-          <div class="type-list">${typeBadges(pokemon.types)}</div>
-          <p class="detail-subtitle">${cleanText(englishText(species.flavor_text_entries)) || "No English Pokédex description is available for this species."}</p>
+          <div class="type-list">${typeBadges(types)}</div>
+          <p class="detail-subtitle">${flavor || "No English Pokédex entry was available."}</p>
         </div>
       </section>
-      ${speciesFacts(species,pokemon)}
-      <section class="section-block"><h2>Base stats</h2>${statMarkup(pokemon.stats)}</section>
+      ${speciesInfoMarkup(species,pokemon)}
+      <section class="section-block"><h2>Base stats</h2>${statMarkup(pokemon.id)}</section>
       <section class="section-block"><h2>Type matchups</h2>${effectivenessMarkup(types)}</section>
-      <section class="section-block"><h2>Abilities</h2><div class="detail-grid">${abilities.map((a)=>`<div class="info-card"><h3>${titleCase(a.name)}${a.hidden ? " · Hidden" : ""}</h3><p style="margin:0;color:var(--muted);font-size:.78rem;line-height:1.55">${a.description}</p></div>`).join("")}</div></section>
-      <section class="section-block"><h2>Evolution family</h2>${evolutionMarkup(evo?.chain)}</section>
-      <section class="section-block"><h2>Forms & varieties (${species.varieties?.length || 0})</h2>${formsMarkup(species)}</section>
-      <section class="section-block"><h2>Moves (${pokemon.moves?.length || 0} move names)</h2><div class="moves-box">${moveListMarkup(pokemon) || '<div class="info-card">No move data available.</div>'}</div></section>
-      <section class="section-block"><h2>Held items</h2><div class="chip-wrap">${(pokemon.held_items||[]).map((x)=>`<span class="text-chip">${titleCase(x.item.name)}</span>`).join("") || '<span class="text-chip">None recorded</span>'}</div></section>
-      <section class="section-block"><h2>Game data & cries</h2><div class="info-card"><div class="info-lines">
-        <div class="info-line"><span>Game index entries</span><span>${pokemon.game_indices?.length || 0}</span></div>
-        <div class="info-line"><span>Gender differences</span><span>${species.has_gender_differences ? "Yes" : "No"}</span></div>
-        <div class="info-line"><span>Switchable forms</span><span>${species.forms_switchable ? "Yes" : "No"}</span></div>
-      </div><div class="audio-row" style="margin-top:12px">${pokemon.cries?.latest ? `<audio controls preload="none" src="${pokemon.cries.latest}"></audio>` : ""}${pokemon.cries?.legacy ? `<audio controls preload="none" src="${pokemon.cries.legacy}"></audio>` : ""}</div></div></section>
-      ${dexTextMarkup(species)}
-      <section class="section-block"><h2>Historical changes</h2>${pastDataMarkup(pokemon) || '<div class="info-card"><span style="color:var(--muted);font-size:.77rem">No historical type, ability, or stat changes recorded.</span></div>'}</section>
-    `;
+      <section class="section-block"><h2>Abilities</h2>${abilityMarkup(pokemon.id)}</section>
+      <section class="section-block"><h2>Evolution family</h2>${evolutionMarkup(Number(species.id))}</section>
+      <section class="section-block"><h2>Forms & varieties</h2>${formsMarkup(Number(species.id))}</section>
+      <section class="section-block"><h2>Moves (${(state.movesByPokemon?.get(pokemon.id)||[]).length})</h2>${movesMarkup(pokemon.id)}</section>
+      ${flavorMarkup(species)}
+      <section class="section-block"><h2>Source</h2><div class="info-card"><span style="color:var(--muted);font-size:.77rem;line-height:1.5">This profile is assembled from the CSV database in the public <strong>PokeAPI/pokeapi</strong> GitHub repository. The site does not depend on the hosted pokeapi.co service.</span></div></section>`;
     els.detail.querySelectorAll("[data-id]").forEach((button)=>button.addEventListener("click",()=>openDetail(Number(button.dataset.id))));
-  } catch (error) {
+  } catch(error) {
     console.error(error);
-    els.detail.innerHTML='<div class="error-box"><strong>Could not load this Pokémon.</strong><br>The detail request failed. Close this panel and try again.</div>';
+    els.detail.innerHTML='<div class="error-box"><strong>Repository data could not be loaded.</strong><br>GitHub was reachable but one or more PokeAPI CSV files could not be downloaded. Reload and try again.</div>';
   }
 }
-function closeDetail() {
+function closeDetail(){
   els.overlay.classList.add("hidden");els.panel.classList.remove("open");els.panel.setAttribute("aria-hidden","true");
   document.body.style.overflow="";history.replaceState(null,"",location.pathname+location.search);
 }
-function randomPokemon() {
-  if (!state.currentResults.length) return;
-  const item = state.currentResults[Math.floor(Math.random()*state.currentResults.length)];
+function setStatus(message,tone="success"){
+  els.status.textContent=message;
+  els.status.style.color=tone==="error"?"var(--danger)":tone==="loading"?"var(--warning)":"var(--success)";
+  els.status.style.background=tone==="error"?"rgba(251,113,133,.1)":tone==="loading"?"rgba(251,191,36,.1)":"rgba(52,211,153,.1)";
+}
+function setTheme(theme){
+  document.documentElement.dataset.theme=theme;
+  try{localStorage.setItem("poke-theme",theme)}catch{}
+  els.theme.textContent=theme==="light"?"☀":"☾";
+}
+async function initCatalog(){
+  setStatus("Loading Pokémon database from GitHub…","loading");
+  try{
+    const [pokemonRows,typeRows]=await Promise.all([cachedCSV("pokemon.csv"),cachedCSV("pokemon_types.csv")]);
+    state.pokemon=pokemonRows.filter((row)=>row.is_default==="1" && Number(row.id)<=1025).map((row)=>({...row,id:Number(row.id)}));
+    for(const row of typeRows){
+      const id=Number(row.pokemon_id);
+      if(id>1025)continue;
+      const list=state.typesByPokemon.get(id)||[];
+      // type IDs are resolved after types.csv loads; keep the numeric ID for now.
+      list.push(`#${row.type_id}`);
+      state.typesByPokemon.set(id,list);
+    }
+    // Resolve type IDs without contacting an API.
+    const types=await cachedCSV("types.csv").catch(()=>[]);
+    const typeMap=new Map(types.map((r)=>[`#${r.id}`,r.identifier]));
+    for(const [id,list] of state.typesByPokemon) state.typesByPokemon.set(id,list.map((x)=>typeMap.get(x)).filter(Boolean));
+    populateFilters();renderCatalog();setStatus(`${state.pokemon.length.toLocaleString()} Pokémon indexed from GitHub`);
+    const hashId=Number(location.hash.match(/(?:pokemon|p)=(\d+)/)?.[1]||0);if(hashId)openDetail(hashId);
+  }catch(error){
+    console.error(error);setStatus("Could not load GitHub data","error");
+    els.catalog.innerHTML='<div class="error-box" style="grid-column:1/-1"><strong>The PokeAPI GitHub database could not be reached.</strong><br>Check that GitHub is accessible on this network, then reload.</div>';
+  }
+}
+function randomPokemon(){
+  if(!state.currentResults.length)return;
+  const item=state.currentResults[Math.floor(Math.random()*state.currentResults.length)];
   openDetail(item.id);
 }
-function setupEvents() {
-  els.search.addEventListener("input",(e)=>{state.query=e.target.value;renderCatalog();});
-  els.generation.addEventListener("change",(e)=>{state.generation=e.target.value;renderCatalog();});
-  els.type.addEventListener("change",async(e)=>{state.type=e.target.value;if(state.type && !state.typeMeta.has(state.type)) await loadTypeFilter(state.type);renderCatalog();});
-  els.region.addEventListener("change",(e)=>{state.region=e.target.value;renderCatalog();});
-  els.sort.addEventListener("change",(e)=>{state.sort=e.target.value;renderCatalog();});
-  els.reset.addEventListener("click",()=>{state.query=state.generation=state.type=state.region="";state.sort="dex";els.search.value="";els.generation.value="";els.type.value="";els.region.value="";els.sort.value="dex";renderCatalog();});
-  els.random.addEventListener("click",randomPokemon);
-  els.catalog.addEventListener("click",(e)=>{const card=e.target.closest("[data-id]");if(card)openDetail(Number(card.dataset.id));});
-  els.close.addEventListener("click",closeDetail);els.overlay.addEventListener("click",closeDetail);
-  document.addEventListener("keydown",(e)=>{if(e.key==="/"&&document.activeElement!==els.search&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();els.search.focus();}if(e.key==="Escape"&&els.panel.classList.contains("open"))closeDetail();});
-  els.theme.addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light" ? "dark" : "light"));
-  window.addEventListener("popstate",()=>{const id=Number(location.hash.match(/(?:pokemon|p)=(\d+)/)?.[1]||0);if(id)openDetail(id);else closeDetail();});
-}
+els.search.addEventListener("input",(e)=>{state.query=e.target.value;renderCatalog()});
+els.generation.addEventListener("change",(e)=>{state.generation=e.target.value;renderCatalog()});
+els.type.addEventListener("change",(e)=>{state.type=e.target.value;renderCatalog()});
+els.region.addEventListener("change",(e)=>{state.region=e.target.value;renderCatalog()});
+els.sort.addEventListener("change",(e)=>{state.sort=e.target.value;renderCatalog()});
+els.reset.addEventListener("click",()=>{state.query=state.generation=state.type=state.region="";state.sort="dex";els.search.value="";els.generation.value="";els.type.value="";els.region.value="";els.sort.value="dex";renderCatalog()});
+els.random.addEventListener("click",randomPokemon);els.close.addEventListener("click",closeDetail);els.overlay.addEventListener("click",closeDetail);
+els.catalog.addEventListener("click",(e)=>{const card=e.target.closest("[data-id]");if(card)openDetail(Number(card.dataset.id))});
+els.theme.addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light"?"dark":"light"));
+document.addEventListener("keydown",(e)=>{if(e.key==="/"&&document.activeElement!==els.search&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();els.search.focus()}if(e.key==="Escape"&&els.panel.classList.contains("open"))closeDetail()});
+window.addEventListener("popstate",()=>{const id=Number(location.hash.match(/(?:pokemon|p)=(\d+)/)?.[1]||0);if(id)openDetail(id);else closeDetail()});
 setTheme((()=>{try{return localStorage.getItem("poke-theme")||"dark"}catch{return "dark"}})());
-setupEvents();
 initCatalog();
