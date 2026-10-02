@@ -345,7 +345,7 @@ function flavorMarkup(species) {
   for(const row of entries){const text=cleanText(row.flavor_text);if(!text||seen.has(text))continue;seen.add(text);unique.push({text,version:row.version_id});}
   return `<details class="disclosure" open><summary>Pokédex entries (${unique.length})</summary><div style="display:grid;gap:8px;padding-bottom:12px">${unique.map((x)=>`<div class="text-chip" style="display:block;line-height:1.5"><strong>Version #${x.version}</strong><br>${x.text}</div>`).join("") || '<div class="text-chip">No English entries available in the repository data.</div>'}</div></details>`;
 }
-async async function openDetail(id) {
+async function openDetail(id) {
   if(!id)return;
   els.overlay.classList.remove("hidden");els.panel.classList.add("open");els.panel.setAttribute("aria-hidden","false");
   document.body.style.overflow="hidden";els.detail.innerHTML='<div class="loading"><div><div class="spinner"></div>Loading repository data…</div></div>';
