@@ -1,1 +1,94 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="A detailed searchable Pokédex covering every Pokémon."><title>PokéDex — Complete Pokémon Cheat Sheet</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Press+Start+2P&display=swap" rel="stylesheet"><link rel="stylesheet" href="style.css"></head><body><div class="app-shell"><header class="hero"><div class="hero-top"><div class="brand"><div class="pokeball-logo" aria-hidden="true"><span></span></div><div><p class="eyebrow">THE COMPLETE</p><h1>PokéDex</h1></div></div><button id="randomBtn" class="button secondary">🎲 Random Pokémon</button></div><p class="hero-copy">Search, filter, and open an in-depth breakdown of every Pokémon, including stats, abilities, moves, evolution chains, breeding, training, forms, and Pokédex lore.</p><label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Search by name, number, or type…" autocomplete="off"><kbd>/</kbd></label></header><main><section class="controls"><div class="filter-group"><label for="typeFilter">Type</label><select id="typeFilter"><option value="">All types</option></select></div><div class="filter-group"><label for="generationFilter">Generation</label><select id="generationFilter"><option value="">All generations</option><option value="1">Generation I</option><option value="2">Generation II</option><option value="3">Generation III</option><option value="4">Generation IV</option><option value="5">Generation V</option><option value="6">Generation VI</option><option value="7">Generation VII</option><option value="8">Generation VIII</option><option value="9">Generation IX</option></select></div><div class="filter-group"><label for="sortFilter">Sort</label><select id="sortFilter"><option value="number">National number</option><option value="name">Name</option></select></div><button id="clearBtn" class="button ghost">Clear</button></section><section class="status-bar"><div><strong id="resultCount">Loading…</strong><span id="statusText"> Loading the Pokédex.</span></div><div class="progress"><span id="progressBar"></span></div></section><section id="grid" class="pokemon-grid" aria-live="polite"></section><div id="sentinel"></div></main><footer><p>Data provided by <a href="https://pokeapi.co/" target="_blank" rel="noreferrer">PokéAPI</a>. Pokémon and Pokémon character names are trademarks of Nintendo, Game Freak, and The Pokémon Company.</p></footer></div><dialog id="detailsDialog"><button id="closeDialog" class="close-dialog" aria-label="Close">×</button><div id="detailsContent"></div></dialog><script src="script.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A complete Pokémon encyclopedia with every species, forms, stats, abilities, moves, evolutions, Pokédex entries, and more." />
+  <meta name="theme-color" content="#111827" />
+  <title>PokéDex Ultra — Every Pokémon, Explained</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="PokéDex Ultra home">
+        <span class="brand-mark" aria-hidden="true">◉</span>
+        <span>
+          <strong>PokéDex Ultra</strong>
+          <small>Every Pokémon. Every detail.</small>
+        </span>
+      </a>
+      <div class="header-actions">
+        <button id="randomBtn" class="ghost-btn" type="button" title="Open a random Pokémon">🎲 Random</button>
+        <button id="themeBtn" class="icon-btn" type="button" aria-label="Toggle theme" title="Toggle theme">☾</button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">THE COMPLETE POKÉMON REFERENCE</div>
+          <h1>Learn <span>every Pokémon</span> in one place.</h1>
+          <p>Search the full National Dex and open an in-depth profile for stats, typing, abilities, evolution, moves, forms, Pokédex text, catch data, and more.</p>
+        </div>
+        <div class="hero-orb" aria-hidden="true"><div class="orb-center">P</div></div>
+      </section>
+
+      <section class="controls-card" aria-label="Pokémon search and filters">
+        <div class="search-row">
+          <label class="search-box" for="searchInput">
+            <span aria-hidden="true">⌕</span>
+            <input id="searchInput" type="search" autocomplete="off" placeholder="Search by name or National Dex #..." />
+            <kbd>/</kbd>
+          </label>
+          <button id="resetBtn" class="secondary-btn" type="button">Reset</button>
+        </div>
+
+        <div class="filter-row">
+          <label><span>Generation</span><select id="generationFilter"><option value="">All generations</option></select></label>
+          <label><span>Type</span><select id="typeFilter"><option value="">All types</option></select></label>
+          <label><span>Region</span><select id="regionFilter"><option value="">All regions</option></select></label>
+          <label><span>Sort</span><select id="sortFilter"><option value="dex">National Dex</option><option value="name">Name A–Z</option><option value="nameDesc">Name Z–A</option></select></label>
+        </div>
+
+        <div class="result-summary">
+          <div><strong id="resultCount">Loading…</strong> Pokémon shown</div>
+          <div id="catalogStatus" class="status-pill">Connecting to PokéAPI…</div>
+        </div>
+      </section>
+
+      <section class="catalog-section" aria-labelledby="catalogHeading">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">NATIONAL DEX</div>
+            <h2 id="catalogHeading">All Pokémon</h2>
+          </div>
+          <p>Click any card for the full profile.</p>
+        </div>
+        <div id="catalog" class="pokemon-grid" aria-live="polite"></div>
+        <div id="emptyState" class="empty-state hidden">
+          <div class="empty-icon">?</div>
+          <h3>No Pokémon found</h3>
+          <p>Try a different name, Dex number, generation, type, or region.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div><strong>PokéDex Ultra</strong><span>Built as a lightweight, static GitHub Pages site.</span></div>
+      <div class="footer-note">Data and sprites are loaded from <a href="https://pokeapi.co/" target="_blank" rel="noreferrer">PokéAPI</a>. Pokémon is a trademark of Nintendo, Game Freak, and The Pokémon Company.</div>
+    </footer>
+  </div>
+
+  <div id="overlay" class="overlay hidden"></div>
+  <aside id="detailPanel" class="detail-panel" aria-hidden="true" aria-labelledby="detailTitle">
+    <div class="detail-topbar">
+      <div id="detailCrumb" class="detail-crumb">Pokémon profile</div>
+      <button id="closeDetail" class="icon-btn" type="button" aria-label="Close Pokémon profile">×</button>
+    </div>
+    <div id="detailContent" class="detail-content"></div>
+  </aside>
+
+  <script type="module" src="./script.js"></script>
+</body>
+</html>
